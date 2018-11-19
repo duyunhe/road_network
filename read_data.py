@@ -7,8 +7,8 @@
 
 import sqlite3
 import matplotlib.pyplot as plt
-from geo import bl2xy
-from refineMap import Road, Point, dog_last
+from geo import bl2xy, dog_last
+from map_struct import Road, Point
 
 
 def main():
@@ -57,7 +57,7 @@ def road_simplify(road):
 def load_sqlite_road():
     """
     从sqlite3中读取路网
-    :return: 
+    :return: list of Road
     """
     conn = sqlite3.connect('./data/hz.db3')
     cursor = conn.cursor()
@@ -85,5 +85,3 @@ def load_sqlite_road():
     conn.close()
     return road_list
 
-
-main()

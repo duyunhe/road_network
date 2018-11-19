@@ -47,6 +47,31 @@ def xy2bl(x, y):
     return blh.b, blh.l
 
 
+def dog_last(path):
+    """
+    简化道路，道格拉斯算法
+    :param path: [[x,y]...[x,y]]
+    :return: 
+    """
+    if len(path) == 2:
+        return path
+    max_dist, sel = -1e10, -1
+    pt0, pt1 = path[0], path[-1]
+
+    for i, pt in enumerate(path):
+        dist = point2segment(pt, pt0, pt1)
+        if dist > max_dist:
+            max_dist, sel = dist, i
+    new_path = []
+    if max_dist > 2.0:
+        path0, path1 = dog_last(path[:sel + 1]), dog_last(path[sel:])
+        new_path.extend(path0[:-1])
+        new_path.extend(path1)
+    else:
+        new_path = [pt0, pt1]
+    return new_path
+
+
 def calc_dist(pt0, pt1):
     """
     计算两点距离
