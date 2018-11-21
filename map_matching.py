@@ -77,7 +77,7 @@ class MapInfo:
                     self.map_node[nodeid] = nd
                 if i > 0:
                     edge_length = calc_dist([x, y], [lastx, lasty])
-                    edge = MapEdge(self.map_node[last_nodeid], self.map_node[nodeid], True,
+                    edge = MapEdge(self.map_node[last_nodeid], self.map_node[nodeid], False,
                                    len(self.map_edge), edge_length, rid)
                     self.map_edge.append(edge)
                 r.add_node(nd)
@@ -179,6 +179,32 @@ class MapMatching(object):
         #         draw_edge(e, 'g')
         plt.show()
 
+    def init_candidate_queue(self, last_point, last_edge, can_queue, node_set):
+        """
+        initialize the queue, add one or two points of the last edge
+        """
+        _, ac, state = point_project_edge(last_point, last_edge)
+        project_dist = np.linalg.norm(np.array(ac))
+        dist0, dist1 = project_dist, last_edge.edge_length - project_dist
+        if dist0 > last_edge.edge_length:
+            dist0, dist1 = last_edge.edge_length, 0
+
+        if last_edge.oneway:
+            node = last_edge.node1
+            dnode = DistNode(node, dist1)
+            can_queue.put(dnode)
+        else:
+            node = last_edge.node0
+            dnode = DistNode(node, dist0)
+            can_queue.put(dnode)
+            node_set.add(node.nodeid)
+
+            node = last_edge.node1
+            dnode = DistNode(node, dist1)
+            can_queue.put(dnode)
+
+        node_set.add(node.nodeid)
+
     def get_candidate_first(self, taxi_data, kdt, X):
         """            
         get candidate edges from road network which fit point 
@@ -205,6 +231,44 @@ class MapMatching(object):
 
         edge_can_list = []
         for i in seg_set:
+            edge_can_list.append(self.map_edge[i])
+
+        return edge_can_list
+
+    def get_candidate_later(self, cur_point, last_point, last_edge, last_state, cnt):
+        """
+        :param cur_point: [px, py]
+        :param last_point: [px, py]
+        :param last_edge: MapEdge
+        :param last_state: direction of vehicle in map edge
+        :return: edge_can_list [edge0, edge1....]
+        """
+        edge_can_list = []
+        T = 80 / 3.6 * 20   # dist_thread
+        node_set = set()    # node_set用于判断是否访问过
+        edge_set = set()    # edge_set用于记录能够访问到的边
+
+        edge_set.add(last_edge.edge_index)
+
+        q = Queue.PriorityQueue(maxsize=-1)  # 优先队列 best first search
+        self.init_candidate_queue(last_point, last_edge, q, node_set)  # 搜索第一步，加入之前线段中的点
+
+        while not q.empty():
+            dnode = q.get()
+            cur_node, cur_dist = dnode.node, dnode.dist
+            if cur_dist >= T:  # 超过阈值后停止
+                break
+            for edge, node in cur_node.link_list:
+                if node.nodeid in node_set:
+                    continue
+                node_set.add(node.nodeid)
+                # 单行线需要判断角度
+                edge_set.add(edge.edge_index)
+                next_dnode = DistNode(node, cur_dist + edge.edge_length)
+                node.prev_node = cur_node
+                q.put(next_dnode)
+
+        for i in edge_set:
             edge_can_list.append(self.map_edge[i])
 
         return edge_can_list
@@ -291,28 +355,115 @@ class MapMatching(object):
         else:
             return self._get_mod_point_later(candidate, point, last_point, cnt)
 
-    def PNT_MATCH(self, data, last_data, cnt=-1):
+    def PNT_MATCH(self, data, last_data, last_edge, cnt=-1):
         """
         点到路段匹配，仅考虑前一个点
         :param data: 当前的TaxiData，见本模块
         :param last_data: 上一TaxiData数据
+        :param last_edge: Edge 
         :param cnt:  for test, int
         :return: 本次匹配到的点 cur_point (Point) 本次匹配到的边 cur_edge (Edge)
         """
+        first = False
+        if last_data is None:
+            cur_point, last_point = None, None
+            first = True
+        elif last_edge is None:
+            first = True
+            cur_point, last_point = None, None
+        else:
+            cur_point, last_point = [data.px, data.py], [last_data.px, last_data.py]
         # 用分块方法做速度更快
         # 实际上kdtree效果也不错，所以就用kdtree求最近节点knn
-        candidate_edges = self.get_candidate_first(data, self.kdt, self.X)
+        if first:
+            candidate_edges = self.get_candidate_first(data, self.kdt, self.X)
+        else:
+            candidate_edges = self.get_candidate_later(cur_point, last_point, last_edge, 0, cnt)
         # if cnt == 4:
         #     draw_edge_list(candidate_edges)
-        if last_data is None:
-            last_point = None
-        else:
-            last_point = [last_data.px, last_data.py]
+
         cur_point, cur_edge, score = self.get_mod_point(data, last_data,
                                                         candidate_edges, last_point, cnt)
         # 注意：得分太高（太远、匹配不上）会过滤
         if score > 100:
             cur_point, cur_edge = None, None
         return cur_point, cur_edge
+
+    def DYN_MATCH(self, traj_order):
+        """
+        using point match with dynamic programming, 
+        :param traj_order: list of Taxi_Data 
+        :return: 
+        """
+        first_point = True
+        last_point, last_edge = None, None
+        last_state = 0  # 判断双向道路当前是正向或者反向
+        cnt = 0
+
+        traj_mod = []  # 存放修正偏移后的data
+
+        for data in traj_order:
+            if first_point:
+                candidate_edges = self.get_candidate_first(data, self.kdt, self.X)
+                # Taxi_Data .px .py .stime .speed
+                first_point = False
+                mod_point, last_edge, score = self.get_mod_point(data, candidate_edges, last_point, cnt)
+                state = 'c'
+                data.set_edge([last_edge, score])
+                traj_mod.append(data)
+                last_point = mod_point
+            else:
+                # 首先判断两个点是否离得足够远
+                T = 10000 / 3600 * 10
+                cur_point = [data.px, data.py]
+                interval = calc_dist(cur_point, last_point)
+                # print cnt, interval
+                if interval < T:
+                    continue
+                # 读取上一个匹配点的信息
+                last_data = traj_mod[cnt - 1]
+                last_point = [last_data.px, last_point.py]
+
+                min_score, sel_edge, sel_score = 1e10, None, 0
+                for last_edge, last_score in last_data.edge_info:
+                    candidate_edges = self.get_candidate_later(cur_point, last_point, last_edge, last_state, cnt)
+
+                    if len(candidate_edges) == 0:
+                        # no match, restart
+                        candidate_edges = self.get_candidate_first(data, self.kdt, self.X)
+                        mod_point, cur_edge, score = self.get_mod_point(data, candidate_edges, None, cnt)
+                        state = 'c'
+                        cur_score = score + 1e5
+                    else:
+                        # if cnt == 147:
+                        #     draw_edge_list(candidate_edges)
+                        mod_point, cur_edge, score = self.get_mod_point(data, candidate_edges, last_point, cnt)
+                        cur_score = score + last_score
+                        state = 'r'
+                    if cur_score < min_score:
+                        min_score, sel_edge, sel_score = cur_score, cur_edge, score
+
+                # if state == 'r':
+                #     trace = get_trace(last_edge, cur_edge, last_point, mod_point)
+                #     draw_seg(trace, 'b')
+
+                offset_dist = calc_dist(mod_point, cur_point)
+                if offset_dist > 100:
+                    # 判断是否出现太远的情况
+                    candidate_edges = self.get_candidate_first(data, self.kdt, self.X)
+                    # draw_edge_list(candidate_edges)
+                    mod_point, cur_edge = self.get_mod_point(data, candidate_edges, None, cnt)
+                    state = 'm'
+
+                traj_mod.append(data)
+                last_point, last_edge = cur_point, cur_edge
+
+            plt.text(data.px, data.py, '{0}'.format(cnt))
+            plt.text(mod_point[0], mod_point[1], '{0}'.format(cnt), color=state)
+
+            cnt += 1
+            print cnt, data.px, data.py
+
+        return traj_mod
 
 
