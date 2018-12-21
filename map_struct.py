@@ -246,34 +246,33 @@ class MapEdge(object):
         self.edge_index = edge_index
         self.edge_length = edge_length
         self.way_id = way_id
+        self.match_direction = 0     #
 
 
-class MatchResult(object):
-    """
-    匹配结果
-    current point
-    match_list: [MatchList, ...]
-    """
-    class MatchPoint(object):
+class MatchState(object):
+    def __init__(self, edge_index, mod_point, dist, score):
         """
-        edge_index, match_point, [last_index1, last_index2...], dist, score
+        :param edge_index: 
+        :param mod_point: 
+        :param dist: current dist
+        :param score: total score
         """
-        def __init__(self, edge_index, mod_point, last_index_list, dist, score):
-            self.edge_index, self.last_index_list = edge_index, last_index_list
-            self.mod_point = mod_point
-            self.dist, self.score = dist, score
+        self.edge_index = edge_index
+        self.mod_point = mod_point
+        self.dist, self.score = dist, score
 
-    def __init__(self, point):
-        self.point, self.first = point, True
-        self.match_point_list = []
-        self.sel = -1
 
-    def add_match(self, edge_index, mod_point, index_list, dist, score):
-        mp = self.MatchPoint(edge_index, mod_point, index_list, dist, score)
-        self.match_point_list.append(mp)
+class SingleMatch(object):
+    """
+    for first matching struct, sorting by dist
+    """
+    def __init__(self, edge, mod_point, dist):
+        """
+        :param edge: matched Edge
+        :param mod_point: point matching
+        :param dist: dist from point to edge
+        """
+        self.edge, self.mod_point, self.dist = edge, mod_point, dist
 
-    def set_sel(self, sel):
-        self.sel = sel
-
-    def set_first(self, first):
-        self.first = first
+    def __lt__(self, other):
+        return self.dist < other.dist

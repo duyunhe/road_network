@@ -4,8 +4,9 @@
 # @简介    : 地图匹配模块
 # @File    : map_matching.py
 
-from map_struct import MapEdge, MapNode, MapRoad, DistNode
-from geo import point2segment, point_project, calc_included_angle, calc_dist, point_project_edge
+from map_struct import MapEdge, MapNode, MapRoad, DistNode, MatchState, SingleMatch
+from geo import point2segment, point_project, calc_included_angle, calc_dist, point_project_edge, \
+                calc_included_angle_math
 import matplotlib.pyplot as plt
 from read_data import load_sqlite_road
 import math
@@ -15,12 +16,33 @@ from sklearn.neighbors import KDTree
 import numpy as np
 
 
+def edge2xy(e):
+    x0, y0 = e.node0.point[0:2]
+    x1, y1 = e.node1.point[0:2]
+    return x0, y0, x1, y1
+
+
+def draw_edge(e, c):
+    x0, y0, x1, y1 = edge2xy(e)
+    x, y = [x0, x1], [y0, y1]
+    plt.plot(x, y, c, linewidth=2)
+    plt.text((x[0] + x[-1]) / 2, (y[0] + y[-1]) / 2, '{0},{1}'.format(e.edge_index, e.way_id))
+
+
+def draw_edge_list(edge_list):
+    for edge in edge_list:
+        if edge.oneway is True:
+            draw_edge(edge, 'brown')
+        else:
+            draw_edge(edge, 'b')
+
+
 def debug_time(func):
     def wrapper(*args, **kwargs):
         bt = clock()
         a = func(*args, **kwargs)
         et = clock()
-        print "map_matching function", func.__name__, "cost", round(et - bt, 2), "secs"
+        print "map_matching function", func.__name__, "cost", round(et - bt, 5), "secs"
         return a
     return wrapper
 
@@ -179,7 +201,7 @@ class MapMatching(object):
         #         draw_edge(e, 'g')
         plt.show()
 
-    def init_candidate_queue(self, last_point, last_edge, can_queue, node_set):
+    def init_candidate_queue(self, last_point, last_edge, can_queue, node_set, cur_point):
         """
         initialize the queue, add one or two points of the last edge
         """
@@ -188,8 +210,9 @@ class MapMatching(object):
         dist0, dist1 = project_dist, last_edge.edge_length - project_dist
         if dist0 > last_edge.edge_length:
             dist0, dist1 = last_edge.edge_length, 0
-
-        if last_edge.oneway:
+        p0, p1 = last_edge.node0.point, last_edge.node1.point
+        angle = calc_included_angle_math(last_point, cur_point, p0, p1)
+        if angle > 0:
             node = last_edge.node1
             dnode = DistNode(node, dist1)
             can_queue.put(dnode)
@@ -197,13 +220,22 @@ class MapMatching(object):
             node = last_edge.node0
             dnode = DistNode(node, dist0)
             can_queue.put(dnode)
-            node_set.add(node.nodeid)
 
-            node = last_edge.node1
-            dnode = DistNode(node, dist1)
-            can_queue.put(dnode)
-
-        node_set.add(node.nodeid)
+        # if last_edge.oneway:
+        #     node = last_edge.node1
+        #     dnode = DistNode(node, dist1)
+        #     can_queue.put(dnode)
+        # else:
+        #     node = last_edge.node0
+        #     dnode = DistNode(node, dist0)
+        #     can_queue.put(dnode)
+        #     node_set.add(node.nodeid)
+        #
+        #     node = last_edge.node1
+        #     dnode = DistNode(node, dist1)
+        #     can_queue.put(dnode)
+        node_set.add(last_edge.node0.nodeid)
+        node_set.add(last_edge.node1.nodeid)
 
     def get_candidate_first(self, taxi_data, kdt, X):
         """            
@@ -235,24 +267,26 @@ class MapMatching(object):
 
         return edge_can_list
 
-    def get_candidate_later(self, cur_point, last_point, last_edge, last_state, cnt):
+    @debug_time
+    def get_candidate_later(self, cur_point, last_point, last_edge, dist_thread, cnt=-1):
         """
         :param cur_point: [px, py]
         :param last_point: [px, py]
         :param last_edge: MapEdge
-        :param last_state: direction of vehicle in map edge
+        :param dist_thread: double 
         :return: edge_can_list [edge0, edge1....]
         """
         edge_can_list = []
-        T = 80 / 3.6 * 20   # dist_thread
+        T = dist_thread   # dist_thread
         node_set = set()    # node_set用于判断是否访问过
         edge_set = set()    # edge_set用于记录能够访问到的边
 
         edge_set.add(last_edge.edge_index)
 
         q = Queue.PriorityQueue(maxsize=-1)  # 优先队列 best first search
-        self.init_candidate_queue(last_point, last_edge, q, node_set)  # 搜索第一步，加入之前线段中的点
+        self.init_candidate_queue(last_point, last_edge, q, node_set, cur_point)  # 搜索第一步，加入之前线段中的点
 
+        candi_cnt = 0
         while not q.empty():
             dnode = q.get()
             cur_node, cur_dist = dnode.node, dnode.dist
@@ -261,6 +295,16 @@ class MapMatching(object):
             for edge, node in cur_node.link_list:
                 if node.nodeid in node_set:
                     continue
+                candi_cnt += 1
+                if edge.node0.nodeid == cur_node.nodeid:
+                    p0, p1 = edge.node0.point, edge.node1.point
+                else:
+                    p0, p1 = edge.node1.point, edge.node0.point
+                angle = calc_included_angle_math(last_point, cur_point, p0, p1)
+                if angle < 0:
+                    continue
+                # if cnt == 26:
+                #     print "edge", edge.edge_index, angle
                 node_set.add(node.nodeid)
                 # 单行线需要判断角度
                 edge_set.add(edge.edge_index)
@@ -270,12 +314,13 @@ class MapMatching(object):
 
         for i in edge_set:
             edge_can_list.append(self.map_edge[i])
+        print "candi later", candi_cnt, len(edge_set)
 
         return edge_can_list
 
     def _get_mod_point_first(self, candidate, point):
         """
-        :param candidate: 
+        :param candidate: Edge list
         :param point: current point
         :return: project_point, sel_edge
         """
@@ -304,19 +349,20 @@ class MapMatching(object):
         min_score, sel_edge, sel_angle = 1e10, None, 0
         min_dist = 1e10
 
+        print "candidate", len(candidate)
         for edge in candidate:
             p0, p1 = edge.node0.point, edge.node1.point
             w0, w1 = 1.0, 10.0
             # 加权计算分数，考虑夹角的影响
             dist = point2segment(point, p0, p1)
-            angle = calc_included_angle(last_point, point, p0, p1)
+            angle = calc_included_angle_math(last_point, point, p0, p1)
             if not edge.oneway and angle < 0:
                 angle = -angle
-            if angle < 0.3:
-                continue
             score = w0 * dist + w1 * (1 - angle)
-            # if cnt == 4:
-            #     print edge.edge_index, dist, score, angle
+            if cnt == 10:
+                print edge.edge_index, dist, score, angle
+            if angle < 0:
+                continue
             if score < min_score:
                 min_score, sel_edge, min_dist, sel_angle = score, edge, dist, angle
         # print min_score, sel_edge.way_id, min_dist, sel_angle
@@ -333,6 +379,7 @@ class MapMatching(object):
             project_point = sel_edge.node0.point
         return project_point, sel_edge, min_score
 
+    @debug_time
     def get_mod_point(self, taxi_data, last_data, candidate, last_point, cnt=-1):
         """
         get best fit point matched with candidate edges
@@ -362,7 +409,7 @@ class MapMatching(object):
         :param last_data: 上一TaxiData数据
         :param last_edge: Edge 
         :param cnt:  for test, int
-        :return: 本次匹配到的点 cur_point (Point) 本次匹配到的边 cur_edge (Edge)
+        :return: 本次匹配到的点 cur_point ([x, y]) 本次匹配到的边 cur_edge (MapEdge)
         """
         first = False
         if last_data is None:
@@ -373,21 +420,74 @@ class MapMatching(object):
             cur_point, last_point = None, None
         else:
             cur_point, last_point = [data.px, data.py], [last_data.px, last_data.py]
+
         # 用分块方法做速度更快
         # 实际上kdtree效果也不错，所以就用kdtree求最近节点knn
         if first:
             candidate_edges = self.get_candidate_first(data, self.kdt, self.X)
         else:
-            candidate_edges = self.get_candidate_later(cur_point, last_point, last_edge, 0, cnt)
-        # if cnt == 4:
+            itv_time = (data.stime - last_data.stime).total_seconds()
+            mean_speed = max(30.0, (data.speed + last_data.speed) / 2)
+            dist_thread = mean_speed / 3.6 * 1.25 * itv_time
+            # print "itv time", itv_time, "s0", data.speed, "last s", last_data.speed, "dist thread", dist_thread
+            candidate_edges = self.get_candidate_later(cur_point, last_point, last_edge, dist_thread, cnt)
+        # if cnt == 26:
         #     draw_edge_list(candidate_edges)
 
         cur_point, cur_edge, score = self.get_mod_point(data, last_data,
                                                         candidate_edges, last_point, cnt)
         # 注意：得分太高（太远、匹配不上）会过滤
-        if score > 100:
+        if score > 150:
             cur_point, cur_edge = None, None
         return cur_point, cur_edge
+
+    """ ---------------------------Dynamic global Matching------------------------------
+    """
+    def get_dyn_points_first(self, point, candidate):
+        """
+        get modified points
+        :param candidate: Edges 候选项
+        :param point: 
+        :return: point_list: list of MatchPoint
+        """
+        q = Queue.PriorityQueue(maxsize=-1)
+
+        # first point
+        for edge in candidate:
+            p0, p1 = edge.node0.point, edge.node1.point
+            dist = point2segment(point, p0, p1)
+            project_point, _, state = point_project(point, p0, p1)
+            sm = SingleMatch(edge, project_point, dist)
+            q.put(sm)
+
+        point_list = []
+        while not q.empty():
+            st = q.get()
+            if st.dist >= 100:
+                break
+            point_list.append(st)
+        return point_list
+
+    def get_dyn_points_later(self, ):
+        pass
+
+    def match_first_point(self, taxi_data, match_states, pre_states, cnt=-1):
+        """
+        :param taxi_data: TaxiData
+        :param match_states: 
+        :param pre_states: 
+        :param cnt:  
+        :return: 
+        """
+        candidate_edges = self.get_candidate_first(taxi_data, self.kdt, self.X)
+        # Taxi_Data .px .py .stime .speed
+        state_list = self.get_dyn_points_first([taxi_data.px, taxi_data.py], candidate_edges)
+        # traj_mod.append(mod_point)
+        for state in state_list:
+            ei = state.edge.edge_index
+            # 用边的index来表示
+            match_states[cnt][ei] = state
+            pre_states[cnt][ei] = None
 
     def DYN_MATCH(self, traj_order):
         """
@@ -396,33 +496,37 @@ class MapMatching(object):
         :return: 
         """
         first_point = True
-        last_point, last_edge = None, None
+        last_point, last_edge, last_data = None, None, None
         last_state = 0  # 判断双向道路当前是正向或者反向
         cnt = 0
-
-        traj_mod = []  # 存放修正偏移后的data
+        order_cnt = len(traj_order)
+        match_states = [{} for i in range(order_cnt)]
+        # match_states  数组，存放每步骤下每条边可能匹配到的最优MatchState(MS)
+        # match_states[i]  维护最优化MS字典 {edge_index: MatchState}
+        pre_states = [{} for i in range(order_cnt)]
+        # 同上，存放每步骤匹配到之前步骤的最优MP
 
         for data in traj_order:
             if first_point:
-                candidate_edges = self.get_candidate_first(data, self.kdt, self.X)
-                # Taxi_Data .px .py .stime .speed
                 first_point = False
-                mod_point, last_edge, score = self.get_mod_point(data, candidate_edges, last_point, cnt)
-                state = 'c'
-                data.set_edge([last_edge, score])
-                traj_mod.append(data)
-                last_point = mod_point
+                self.match_first_point(data, match_states, pre_states)
             else:
                 # 首先判断两个点是否离得足够远
                 T = 10000 / 3600 * 10
                 cur_point = [data.px, data.py]
-                interval = calc_dist(cur_point, last_point)
+                itv_dist = calc_dist(cur_point, last_point)
                 # print cnt, interval
-                if interval < T:
+                if itv_dist < T:
                     continue
+                itv_time = (data.stime - last_data.stime).total_seconds()
+                mean_speed = max(30.0, (data.speed + last_data.speed) / 2)
+                dist_thread = mean_speed / 3.6 * 1.25 * itv_time
                 # 读取上一个匹配点的信息
-                last_data = traj_mod[cnt - 1]
-                last_point = [last_data.px, last_point.py]
+                last_state = match_states[cnt - 1]      # dict
+                cur_state = match_states[cnt]
+                for edge_index, state in last_state.iteritems():
+                    candidate_edges = self.get_candidate_later(cur_point, last_point, state.edge, dist_thread)
+                    self._get_mod_point_later(candidate_edges, cur_point, last_point, cnt)
 
                 min_score, sel_edge, sel_score = 1e10, None, 0
                 for last_edge, last_score in last_data.edge_info:
@@ -455,15 +559,14 @@ class MapMatching(object):
                     mod_point, cur_edge = self.get_mod_point(data, candidate_edges, None, cnt)
                     state = 'm'
 
-                traj_mod.append(data)
-                last_point, last_edge = cur_point, cur_edge
+                last_point = cur_point
 
-            plt.text(data.px, data.py, '{0}'.format(cnt))
-            plt.text(mod_point[0], mod_point[1], '{0}'.format(cnt), color=state)
+            # plt.text(data.px, data.py, '{0}'.format(cnt))
+            # plt.text(mod_point[0], mod_point[1], '{0}'.format(cnt), color=state)
 
             cnt += 1
             print cnt, data.px, data.py
 
-        return traj_mod
+
 
 

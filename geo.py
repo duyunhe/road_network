@@ -122,6 +122,10 @@ def moid(x):
         return 0
 
 
+def vec_doc(x0, y0, x1, y1):
+    return x0 * x1 + y0 * y1
+
+
 def calc_included_angle(s0p0, s0p1, s1p0, s1p1):
     """
     计算夹角
@@ -137,6 +141,23 @@ def calc_included_angle(s0p0, s0p1, s1p0, s1p1):
     if dt == 0:
         return 0
     return np.dot(v0, v1) / dt
+
+
+def calc_included_angle_math(s0p0, s0p1, s1p0, s1p1):
+    """
+    计算夹角 cos alpha
+    :param s0p0: 线段0点0 其中点用[x,y]表示
+    :param s0p1: 线段0点1 
+    :param s1p0: 线段1点0
+    :param s1p1: 线段1点1
+    :return: 
+    """
+    x0, y0 = s0p1[0] - s0p0[0], s0p1[1] - s0p0[1]
+    x1, y1 = s1p1[0] - s1p0[0], s1p1[1] - s1p0[1]
+    dt = math.sqrt(vec_doc(x0, y0, x0, y0)) * math.sqrt(vec_doc(x1, y1, x1, y1))
+    if dt == 0:
+        return 0
+    return vec_doc(x0, y0, x1, y1) / dt
 
 
 def is_near_segment(pt0, pt1, pt2, pt3):
