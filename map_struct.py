@@ -79,6 +79,7 @@ class Road:
     """
     道路
     字段：道路名，方向，道路中线段list  
+        ort 0: 双向 1: 单向
     """
     def __init__(self, name, ort, rid):
         self.name, self.ort = name, ort
@@ -231,6 +232,9 @@ class MapNode(object):
 
     def add_rlink(self, edge, node):
         self.rlink_list.append([edge, node])
+
+    def __eq__(self, other):
+        return self.nodeid == other.nodeid
 
 
 class MapEdge(object):

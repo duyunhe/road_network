@@ -7,7 +7,7 @@
 
 from time import clock
 import os
-from geo import calc_dist, point_project_edge
+from geo import calc_dist, point_project_edge, calc_included_angle_math
 from map_struct import DistNode
 import Queue
 import numpy as np
@@ -36,7 +36,7 @@ def get_speed_list_a1(travel_list, last_spd, cur_spd, ave_spd, itv_time):
     :param cur_spd: 
     :param ave_spd: 
     :param itv_time: 
-    :return: list of [Edge, speed]
+    :return: list of [Edge, speed, direction(True or False)]
     """
     if len(travel_list) == 0:
         return []
@@ -47,8 +47,8 @@ def get_speed_list_a1(travel_list, last_spd, cur_spd, ave_spd, itv_time):
     #     speed_list = [(cur_spd + last_spd + ave_spd) / 3] * len(travel_list)
     # else:
     speed_list = [ave_spd] * len(travel_list)
-    edge_list, dist_list = zip(*travel_list)
-    seg_speed_list = zip(edge_list, speed_list)
+    edge_list, dist_list, ort_list = zip(*travel_list)
+    seg_speed_list = zip(edge_list, speed_list, ort_list)
 
     global normal_cnt
     normal_cnt += 1
@@ -155,11 +155,10 @@ def init_candidate_queue(last_point, last_edge, can_queue, node_set):
         node = last_edge.node1
         dnode = DistNode(node, dist1)
         can_queue.put(dnode)
-
     node_set.add(node.nodeid)
 
 
-@debug_time
+# @debug_time
 def estimate_road_speed(last_edge, cur_edge, last_point, cur_point, last_data, cur_data, cnt=-1):
     """
     通过路网估计两条数据之间各个路段的速度
@@ -170,8 +169,9 @@ def estimate_road_speed(last_edge, cur_edge, last_point, cur_point, last_data, c
     :param last_data: 上一次记录的GPS数据 TaxiData
     :param cur_data: 本次记录的GPS数据
     :param cnt:     for debug  int
-    :return: trace, travel list : travel data:[edge(list of [x, y]), edge_speed]
+    :return: trace, travel list : travel data:[edge(list of [x, y]), edge_speed, direction]
     """
+    # print cnt
     spoint, epoint = last_point, cur_point
     # 首先是同一条边的情况
     if last_edge == cur_edge:
@@ -179,7 +179,11 @@ def estimate_road_speed(last_edge, cur_edge, last_point, cur_point, last_data, c
         itv_time = (cur_data.stime - last_data.stime).total_seconds()
         
         observed_spd = cur_dist / itv_time * 3.6
-        return [spoint, epoint], [[cur_edge, observed_spd]]
+        # 判断方向
+        angle = calc_included_angle_math(spoint, epoint, cur_edge.node0.point, cur_edge.node1.point)
+        match_direction = True if angle > 0 else False
+        # print cur_edge.way_id, match_direction
+        return [spoint, epoint], [[cur_edge, observed_spd, match_direction]]
 
     # 使用Dijkstra算法搜索路径
     # 加入优先队列(最小堆)优化速度
@@ -203,6 +207,10 @@ def estimate_road_speed(last_edge, cur_edge, last_point, cur_point, last_data, c
             esti_cnt += 1
             if node.nodeid in node_set:
                 continue
+            if edge.node0 == node:
+                edge.match_direction = False
+            else:
+                edge.match_direction = True
             node_set.add(node.nodeid)
             next_dnode = DistNode(node, cur_dist + edge.edge_length)
             # 在每个MapNode里面记录下搜索路径
@@ -211,7 +219,7 @@ def estimate_road_speed(last_edge, cur_edge, last_point, cur_point, last_data, c
             if edge.edge_index == cur_edge.edge_index:
                 edge_found = True
 
-    print "esti", esti_cnt
+    # print "esti", esti_cnt
     if not edge_found:
         return [], []
 
@@ -219,32 +227,34 @@ def estimate_road_speed(last_edge, cur_edge, last_point, cur_point, last_data, c
     # 终点
     trace = [cur_point]
     n0, n1 = cur_edge.node0, cur_edge.node1
-    if n0.prev_node == n1:  # n1 is nearer from last point
+    if n0.prev_node is None or n0.prev_node == n1:  # n1 is nearer from last point
         cur_node = n1
     else:
         cur_node = n0
     dist = calc_dist(cur_point, cur_node.point)
+    # Here, Add edge
     travel = []  # travel edge list, from last edge to current edge
     if dist > 0:
-        travel.append([cur_edge, dist])
+        travel.append([cur_edge, dist, cur_edge.match_direction])
 
     # 逆推
     while cur_node != last_edge.node0 and cur_node != last_edge.node1:
         trace.append(cur_node.point)
         prev_edge = cur_node.prev_edge
-        travel.append([prev_edge, prev_edge.edge_length])
+        travel.append([prev_edge, prev_edge.edge_length, prev_edge.match_direction])
         cur_node = cur_node.prev_node
 
     # 起点
     dist = calc_dist(last_point, cur_node.point)
+    match_direction = True if cur_node == last_edge.node1 else False
     if dist > 0:
-        travel.append([last_edge, dist])
+        travel.append([last_edge, dist, match_direction])
     # 所以要倒序
     travel = travel[::-1]
 
     travel_dist = 0.0
     # 简单加一下
-    for edge, dist in travel:
+    for edge, dist, _ in travel:
         travel_dist += dist
     itv_time = (cur_data.stime - last_data.stime).total_seconds()
 
@@ -258,5 +268,8 @@ def estimate_road_speed(last_edge, cur_edge, last_point, cur_point, last_data, c
     trace.append(spoint)
     # print "estimate,{0} ".format(cnt), et - bt
     spd_list = get_speed_list_a1(travel, last_spd, cur_spd, observed_spd, itv_time)
+
+    # for edge, spd, ort in spd_list:
+    #     print edge.way_id, ort
 
     return trace, spd_list

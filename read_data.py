@@ -6,6 +6,7 @@
 
 
 import sqlite3
+import cx_Oracle
 import matplotlib.pyplot as plt
 from geo import bl2xy, dog_last
 from map_struct import Road, Point
@@ -65,6 +66,52 @@ def road_simplify(road):
         pt = Point(xy[0], xy[1])
         road.add_point(pt)
     road.gene_segment()
+
+
+@debug_time
+def load_oracle_road():
+    """
+    从原始做好的oracle路网中读取路网 
+    :return: list of Road
+    """
+    conn = cx_Oracle.connect("hz/hz@192.168.11.88/orcl")
+    cursor = conn.cursor()
+    cursor.execute("select sp.s_id, sp.seq, sp.longti, sp.lati, s.s_name, s.direction"
+                   " from tb_seg_point sp, tb_segment s " 
+                   "where sp.s_id = s.s_id and s.rank != '次要道路' and s.rank != '连杆道路'"
+                   " order by s_id, seq")
+    xy_dict = {}
+    name_dic = {}           # name
+    dir_dict = {}           # direction
+    for items in cursor:
+        rid = int(items[0])
+        l, b = map(float, items[2:4])
+        l, b = wgs84togcj02(l, b)
+        x, y = bl2xy(b, l)
+        pt = Point(x, y)
+        name = items[4]
+        ort = int(items[5])
+        try:
+            xy_dict[rid].append(pt)
+        except KeyError:
+            xy_dict[rid] = [pt]
+            name_dic[rid] = name
+            dir_dict[rid] = ort
+    road_list = []
+    # cnt0, cnt1 = 0, 0
+    for rid, items in xy_dict.iteritems():
+        ort = dir_dict[rid]
+        if ort == 2:
+            items.reverse()
+        r = Road(name_dic[rid], ort, rid)
+        r.set_point_list(items)
+        # cnt0 += len(r.point_list)
+        road_list.append(r)
+        road_simplify(r)
+        # cnt1 += len(r.point_list)
+    cursor.close()
+    conn.close()
+    return road_list
 
 
 @debug_time

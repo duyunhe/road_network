@@ -8,12 +8,13 @@ from map_struct import MapEdge, MapNode, MapRoad, DistNode, MatchState, SingleMa
 from geo import point2segment, point_project, calc_included_angle, calc_dist, point_project_edge, \
                 calc_included_angle_math
 import matplotlib.pyplot as plt
-from read_data import load_sqlite_road
-import math
+from read_data import load_sqlite_road, load_oracle_road
 from time import clock
 import Queue
 from sklearn.neighbors import KDTree
 import numpy as np
+import os
+os.environ['NLS_LANG'] = 'SIMPLIFIED CHINESE_CHINA.UTF8'
 
 
 def edge2xy(e):
@@ -35,6 +36,11 @@ def draw_edge_list(edge_list):
             draw_edge(edge, 'brown')
         else:
             draw_edge(edge, 'b')
+
+
+def draw_node_list(xy_list):
+    x, y = zip(*xy_list)
+    plt.plot(x, y, c='r', marker='o', markersize=3, linestyle='')
 
 
 def debug_time(func):
@@ -60,19 +66,21 @@ class MapInfo:
     def __init__(self):
         self.map_node = {}  # 地图节点MapNode
         self.map_edge = []  # 地图边，每一线段都是一条MapEdge，MapEdge两端是MapNode
-        self.map_road = {}  # 记录道路信息
+        self.map_road = {}  # 记录道路信息 MapRoad
         self.kdt, self.X = None, None
 
-    def load_map(self):
-        print "===========load map==========="
-        print "... ..."
-        road_list = load_sqlite_road()
+    def process_road_list(self, road_list):
+        """
+        处理road list，放入类中的基本数据结构中
+        :param road_list: [Road]
+        :return: 
+        """
         map_temp_node = {}  # 维护地图节点
-        road_point = {}
+        road_point = {}     # temp dict, save road points list
 
         for road in road_list:
             rid = road.rid
-            r = MapRoad("", 0, 0)
+            r = MapRoad(road.name, road.ort, 1)
             self.map_road[rid] = r
             pt_list = []
             for point in road.point_list:
@@ -99,11 +107,18 @@ class MapInfo:
                     self.map_node[nodeid] = nd
                 if i > 0:
                     edge_length = calc_dist([x, y], [lastx, lasty])
-                    edge = MapEdge(self.map_node[last_nodeid], self.map_node[nodeid], False,
-                                   len(self.map_edge), edge_length, rid)
+                    edge = MapEdge(self.map_node[last_nodeid], self.map_node[nodeid], False, len(self.map_edge),
+                                   edge_length, rid)
                     self.map_edge.append(edge)
                 r.add_node(nd)
                 last_nodeid, lastx, lasty = nodeid, x, y
+
+    def load_map(self):
+        print "===========load map==========="
+        print "... ..."
+        road_list = load_oracle_road()
+        self.process_road_list(road_list)
+
         print "read", len(self.map_road), "roads"
         print "load", len(self.map_node), "nodes", len(self.map_edge), "edges"
         print "=================================="
@@ -135,7 +150,7 @@ class MapMatching(object):
     """
     封装地图匹配类
     在init时调用MapInfo.init_map，读取地图及初始化数据结构
-    单点匹配时调用LCL_MATCH，传入15-20个GPS点的位置和车辆标识，得到轨迹的匹配点和匹配边
+    单点匹配时调用DYN_MATCH，传入15-20个GPS点的位置和车辆标识，得到轨迹的匹配点和匹配边
     """
 
     @debug_time
@@ -192,7 +207,7 @@ class MapMatching(object):
                 c = 'k'
             plt.plot(x, y, c=c, alpha=0.3, linewidth=2)
 
-            # if c == 'm' or c == 'red':
+            # if rid == 3188 or rid == 3129:
             #     plt.text((x[0] + x[-1]) / 2, (y[0] + y[-1]) / 2, "{0}".format(rid))
             # plt.text(x[0], y[0], "{0},{1}".format(rid, speed))
 
@@ -237,21 +252,23 @@ class MapMatching(object):
         node_set.add(last_edge.node0.nodeid)
         node_set.add(last_edge.node1.nodeid)
 
-    def get_candidate_first(self, taxi_data, kdt, X):
+    def get_candidate_first(self, taxi_data, kdt, X, cnt):
         """            
         get candidate edges from road network which fit point 
         :param taxi_data: Taxi_Data  .px, .py, .speed, .stime
         :param kdt: kd-tree
         :return: edge candidate list  list[edge0, edge1, edge...]
         """
-        dist, ind = kdt.query([[taxi_data.px, taxi_data.py]], k=15)
+        dist, ind = kdt.query([[taxi_data.px, taxi_data.py]], k=50)
 
         pts = []
         seg_set = set()
+        xy_list = []
         # fetch nearest map nodes in network around point, then check their linked edges
         for i in ind[0]:
             pts.append([X[i][0], X[i][1]])
             node_id = self.nodeid_list[i]
+            xy_list.append(self.map_node[node_id].point)
             edge_list = self.map_node[node_id].link_list
             for e, nd in edge_list:
                 seg_set.add(e.edge_index)
@@ -260,6 +277,8 @@ class MapMatching(object):
             edge_list = self.map_node[node_id].rlink_list
             for e, nd in edge_list:
                 seg_set.add(e.edge_index)
+        # if cnt == 12:
+        #     draw_node_list(xy_list)
 
         edge_can_list = []
         for i in seg_set:
@@ -267,7 +286,7 @@ class MapMatching(object):
 
         return edge_can_list
 
-    @debug_time
+    # @debug_time
     def get_candidate_later(self, cur_point, last_point, last_edge, dist_thread, cnt=-1):
         """
         :param cur_point: [px, py]
@@ -314,7 +333,7 @@ class MapMatching(object):
 
         for i in edge_set:
             edge_can_list.append(self.map_edge[i])
-        print "candi later", candi_cnt, len(edge_set)
+        # print "candi later", candi_cnt, len(edge_set)
 
         return edge_can_list
 
@@ -349,7 +368,7 @@ class MapMatching(object):
         min_score, sel_edge, sel_angle = 1e10, None, 0
         min_dist = 1e10
 
-        print "candidate", len(candidate)
+        # print "candidate", len(candidate)
         for edge in candidate:
             p0, p1 = edge.node0.point, edge.node1.point
             w0, w1 = 1.0, 10.0
@@ -359,8 +378,8 @@ class MapMatching(object):
             if not edge.oneway and angle < 0:
                 angle = -angle
             score = w0 * dist + w1 * (1 - angle)
-            if cnt == 10:
-                print edge.edge_index, dist, score, angle
+            # if cnt == 10:
+            #     print edge.edge_index, dist, score, angle
             if angle < 0:
                 continue
             if score < min_score:
@@ -379,7 +398,7 @@ class MapMatching(object):
             project_point = sel_edge.node0.point
         return project_point, sel_edge, min_score
 
-    @debug_time
+    # @debug_time
     def get_mod_point(self, taxi_data, last_data, candidate, last_point, cnt=-1):
         """
         get best fit point matched with candidate edges
@@ -424,24 +443,33 @@ class MapMatching(object):
         # 用分块方法做速度更快
         # 实际上kdtree效果也不错，所以就用kdtree求最近节点knn
         if first:
-            candidate_edges = self.get_candidate_first(data, self.kdt, self.X)
+            candidate_edges = self.get_candidate_first(data, self.kdt, self.X, cnt)
         else:
             itv_time = (data.stime - last_data.stime).total_seconds()
             mean_speed = max(30.0, (data.speed + last_data.speed) / 2)
             dist_thread = mean_speed / 3.6 * 1.25 * itv_time
             # print "itv time", itv_time, "s0", data.speed, "last s", last_data.speed, "dist thread", dist_thread
             candidate_edges = self.get_candidate_later(cur_point, last_point, last_edge, dist_thread, cnt)
-        # if cnt == 26:
+        # if cnt == 12:
         #     draw_edge_list(candidate_edges)
 
         cur_point, cur_edge, score = self.get_mod_point(data, last_data,
                                                         candidate_edges, last_point, cnt)
         # 注意：得分太高（太远、匹配不上）会过滤
-        if score > 150:
+        if score > 100:
             cur_point, cur_edge = None, None
+        # 用最近匹配做一次
+        if cur_edge is None:
+            candidate_edges = self.get_candidate_first(data, self.kdt, self.X, cnt)
+            cur_point, cur_edge, score = self.get_mod_point(data, last_data, candidate_edges, last_point, cnt)
+            # Again
+            if score > 100:
+                cur_point, cur_edge = None, None
         return cur_point, cur_edge
 
     """ ---------------------------Dynamic global Matching------------------------------
+    """
+    """ ********************************************************************************
     """
     def get_dyn_points_first(self, point, candidate):
         """

@@ -4,13 +4,14 @@
 # @简介    : 计算历史数据
 # @File    : matchData.py
 
-import cx_Oracle
+
 from datetime import datetime, timedelta
 from geo import bl2xy, calc_dist
 import matplotlib.pyplot as plt
 from time import clock
 from collections import defaultdict
-import numpy as np
+import cx_Oracle
+from tti import get_tti_v0
 from estimate_speed import estimate_road_speed
 import json
 import redis
@@ -88,7 +89,19 @@ def check_itv(trace_dict):
                 itv = int((data.stime - last_data.stime).total_seconds() / 20)
                 itv_cnt[itv] += 1
             last_data = data
-    print itv_cnt
+    # print itv_cnt
+
+
+def get_rid_set(conn):
+    # return all rids
+    cursor = conn.cursor()
+    sql = "select distinct(rid) from TB_ROAD_POINT_ON_MAP t"
+    cursor.execute(sql)
+    id_set = set()
+    for item in cursor:
+        rid = item[0]
+        id_set.add(rid)
+    return id_set
 
 
 @debug_time
@@ -97,15 +110,15 @@ def get_all_gps_data():
     从数据库中获取一段时间的GPS数据
     :return: 
     """
-    end_time = datetime(2018, 5, 15, 14, 0, 0)
+    end_time = datetime(2018, 5, 1, 5, 30, 0)
     conn = cx_Oracle.connect('hz/hz@192.168.11.88:1521/orcl')
     begin_time = end_time + timedelta(minutes=-30)
-    sql = "select px, py, speed_time, state, speed, carstate, direction, vehicle_num from " \
-          "TB_GPS_1805 t where speed_time >= :1 " \
-          "and speed_time < :2 and vehicle_num = '浙AT9681' order by speed_time "
-
     # sql = "select px, py, speed_time, state, speed, carstate, direction, vehicle_num from " \
-    #       "TB_GPS_1805 t where speed_time >= :1 and speed_time < :2"
+    #       "TB_GPS_1805 t where speed_time >= :1 " \
+    #       "and speed_time < :2 and vehicle_num = '浙AT7484' order by speed_time "
+
+    sql = "select px, py, speed_time, state, speed, carstate, direction, vehicle_num from " \
+          "TB_GPS_1805 t where speed_time >= :1 and speed_time < :2"
 
     tup = (begin_time, end_time)
     cursor = conn.cursor()
@@ -141,7 +154,6 @@ def get_all_gps_data():
         last_data = None
         for data in trace:
             esti = True
-            dist = 0
             if last_data is not None:
                 dist = calc_dist([data.px, data.py], [last_data.px, last_data.py])
                 dt = (data.stime - last_data.stime).total_seconds()
@@ -166,7 +178,7 @@ def get_all_gps_data():
         if len(new_trace) >= 5:
             new_dict[veh] = new_trace
             record_cnt += len(new_trace)
-    print "all car records", record_cnt, "car number", len(new_dict)
+    # print "all car records", record_cnt, "car number", len(new_dict)
     cursor.close()
     conn.close()
     check_itv(new_dict)
@@ -259,6 +271,30 @@ def get_gps_data_from_redis():
     return new_trace
 
 
+def rid_mapping():
+    map_dict = {}
+    fp = open('mapping.txt')
+    for line in fp.readlines():
+        items = line.strip('\n').split(',')
+        i0, i1 = items[:]
+        map_dict[i0] = i1
+    return map_dict
+
+
+def get_rid(way_id, ort, map_dict):
+    """
+    获取实际的路网road_id 在显示路网中的id
+    :param way_id: road_id in tb_road_segment
+    :param ort: direction when matching road
+    :param map_dict
+    :return: road_id in tb_road_point_on_map
+    """
+    if way_id in map_dict.keys():
+        return map_dict[way_id]
+    else:
+        return way_id * 2 if ort else way_id * 2 + 1
+
+
 def get_gps_data():
     end_time = datetime(2018, 5, 8, 15, 0, 0)
     conn = cx_Oracle.connect('hz/hz@192.168.11.88:1521/orcl')
@@ -303,10 +339,8 @@ def get_gps_data():
         trace.sort(cmp1)
         new_trace = []
         last_data = None
-        i = 0
         for data in trace:
             esti = True
-            dist = 0
             if last_data is not None:
                 dist = calc_dist([data.px, data.py], [last_data.px, last_data.py])
                 dt = (data.stime - last_data.stime).total_seconds()
@@ -353,8 +387,8 @@ def draw_points(pt_list):
         return
     x, y = zip(*pt_list)
     plt.plot(x, y, 'b+')
-    for i in range(len(pt_list)):
-        x, y = pt_list[i][0:2]
+    # for i in range(len(pt_list)):
+    #     x, y = pt_list[i][0:2]
 
 
 def save_road_speed(conn, road_speed):
@@ -363,7 +397,7 @@ def save_road_speed(conn, road_speed):
     cursor.execute(sql)
     conn.commit()
     sql = "insert into tb_road_speed values(:1, :2, :3, :4, :5, 0)"
-    tup_list = []
+    # tup_list = []
     for rid, speed_list in road_speed.iteritems():
         speed, num, tti = speed_list[:]
         if speed == float('nan') or speed == float('inf'):
@@ -393,6 +427,21 @@ def get_def_speed(conn):
     return def_speed
 
 
+def road_speed_complete(conn, road_speed, def_speed):
+    """
+    对每一条道路补全road speed中的数据
+    :param conn: oracle connection
+    :param road_speed: dict
+    :param def_speed: 
+    :return: 
+    """
+    rid_set = get_rid_set(conn)
+    for rid in rid_set:
+        if rid not in road_speed.keys():
+            idx = get_tti_v0(def_speed[rid], def_speed[rid])
+            road_speed[rid] = [def_speed[rid], 0, idx]
+
+
 def save_roadspeed_bak(conn, speed_dict):
     now = datetime.now()
     cursor = conn.cursor()
@@ -409,13 +458,14 @@ def save_roadspeed_bak(conn, speed_dict):
     conn.commit()
 
 
-@debug_time
+# @debug_time
 def match2road(veh, data, cnt):
     """
     :param veh: 车辆id
     :param data: TaxiData，见map_matching
     :param cnt:  for debug
-    :return: point, edge, speed_list[edge, edge_speed], state
+    :return: point, edge, speed_list, state
+    speed_list: [edge(MapEdge), edge_speed(float), forward direction(bool, if two way)]
     """
     try:
         last_data, last_edge, last_point = data_list[veh], edge_list[veh], point_list[veh]
@@ -425,7 +475,7 @@ def match2road(veh, data, cnt):
 
     # if veh == 'AT3006':
     #     print "data", cnt, data.speed, data.stime, dist
-    print cnt
+    # print cnt
     cur_point, cur_edge = mm.PNT_MATCH(data, last_data, last_edge, cnt)
     # print "process {0}".format(cnt)
     speed_list = []
@@ -462,66 +512,65 @@ def match2road(veh, data, cnt):
 
 @debug_time
 def run(trace_dict):
-    # conn = oracle_util.get_connection()
+    conn = cx_Oracle.connect("hz/hz@192.168.11.88/orcl")
     # trace_dict = get_gps_data()
     # trace_dict = get_gps_data_from_redis()
     # return
     # print len(trace)
     mod_list = []
+    mapping_dict = rid_mapping()        # 某些单行路的映射
+    # 因为路网制作时，没有制作到高架，因此将高架映射到地面道路
     dtrace = []
     tup_list = []
+    road_temp = {}      # 存放道路速度临时值
     for veh, trace in trace_dict.iteritems():
         # if veh != u'o浙A3086E':
         #     continue
         for i, data in enumerate(trace):
             mod_point, cur_edge, speed_list, ret, match_trace = match2road(data.veh, data, i)
-            # for edge, spd in speed_list:
-            #     try:
-            #         road_temp[edge.way_id].append([spd, edge.edge_length])
-            #     except KeyError:
-            #         road_temp[edge.way_id] = [[spd, edge.edge_length]]
-            #     tup = (edge.way_id, spd, veh, data.stime)
-            #     tup_list.append(tup)
+            for edge, spd, ort in speed_list:
+                rid = get_rid(edge.way_id, ort, mapping_dict)
+                try:
+                    road_temp[rid].append([spd, edge.edge_length])
+                except KeyError:
+                    road_temp[rid] = [[spd, edge.edge_length]]
+                tup = (rid, spd, veh, data.stime)
+                tup_list.append(tup)
             dtrace = trace
-            draw_match(match_trace)
+            # draw_match(match_trace)
             if mod_point is not None:
                 mod_list.append(mod_point)
-                # break
 
-        # print "update speed detail"
-        # def_speed = get_def_speed(conn)
-        # road_speed = {}
-        # # his_speed_list = get_history_speed_list(conn, datetime.now())
-        # for rid, sp_list in road_temp.iteritems():
-        #     W, S = 0, 0
-        #     for sp, w in sp_list:
-        #         S, W = S + sp * w, W + w
-        #     spd = S / W
-        #     n_sample = len(sp_list)
-        #     # 当采样点过少时，假设道路通畅，用自由流速度加权
-        #     if n_sample < 10:
-        #         # weight = 10 - n_sample ?
-        #         spd = (spd * n_sample + def_speed[rid] * (10 - n_sample)) / 10
-        #     # radio = def_speed[rid] / spd
-        #     idx = get_tti_v0(spd, def_speed[rid])
-        #     # print rid, S / W, len(sp_list), radio, idx
-        #     road_speed[rid] = [spd, n_sample, idx]
-        # # 直接上历史记录
-        # for rid in range(ROAD_NUMBER):
-        #     if rid not in road_speed.keys():
-        #         idx = get_tti_v2(def_speed[rid], def_speed[rid])
-        #         road_speed[rid] = [def_speed[rid], 0, idx]
-        # save_road_speed(conn, road_speed)
-        # # save_roadspeed_bak(conn, road_speed)
-        # print estimate_speed.normal_cnt, estimate_speed.ab_cnt, estimate_speed.error_cnt
+    # print "update speed detail"
+    def_speed = get_def_speed(conn)
+    road_speed = {}         # 入库的道路速度
+    # his_speed_list = get_history_speed_list(conn, datetime.now())
+    for rid, sp_list in road_temp.iteritems():
+        if rid not in def_speed.keys():
+            continue
+        W, S = 0, 0
+        for sp, w in sp_list:
+            S, W = S + sp * w, W + w
+        spd = S / W
+        n_sample = len(sp_list)
+        # 当采样点过少时，假设道路通畅，用自由流速度加权
+        if n_sample < 10:
+            # weight = 10 - n_sample ?
+            spd = (spd * n_sample + def_speed[rid] * (10 - n_sample)) / 10
+        # radio = def_speed[rid] / spd
+        idx = get_tti_v0(spd, def_speed[rid])
+        # print rid, S / W, len(sp_list), radio, idx
+        road_speed[rid] = [spd, n_sample, idx]
+    # 补完无数据
+    # road_speed_complete(conn, road_speed, def_speed)
+    save_road_speed(conn, road_speed)
+    # print estimate_speed.normal_cnt, estimate_speed.ab_cnt, estimate_speed.error_cnt
 
-        # print "main process {0}".format(len(trace_dict)), et - bt
-    draw_trace(dtrace)
-    draw_points(mod_list)
-    mm.plot_map({})
-    # draw_map(road_speed)
-    # plt.show()
-    # conn.close()
+    # print "main process {0}".format(len(trace_dict)), et - bt
+    # draw_trace(dtrace)
+    # draw_points(mod_list)
+    # mm.plot_map({})
+    conn.close()
 
 
 def run1(trace_dict):
@@ -532,9 +581,10 @@ def run1(trace_dict):
         break
 
 
+@debug_time
 def main():
     trace_dict = get_all_gps_data()
-    run1(trace_dict)
+    run(trace_dict)
 
 
 # get_gps_data_from_redis()
