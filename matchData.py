@@ -105,14 +105,15 @@ def get_rid_set(conn):
 
 
 @debug_time
-def get_all_gps_data():
+def get_all_gps_data(end_time):
     """
     从数据库中获取一段时间的GPS数据
+    :param end_time 
     :return: 
     """
-    end_time = datetime(2018, 5, 1, 5, 30, 0)
+    # end_time = datetime(2018, 5, 1, 5, 0, 0)
     conn = cx_Oracle.connect('hz/hz@192.168.11.88:1521/orcl')
-    begin_time = end_time + timedelta(minutes=-30)
+    begin_time = end_time + timedelta(minutes=-15)
     # sql = "select px, py, speed_time, state, speed, carstate, direction, vehicle_num from " \
     #       "TB_GPS_1805 t where speed_time >= :1 " \
     #       "and speed_time < :2 and vehicle_num = '浙AT7484' order by speed_time "
@@ -181,7 +182,7 @@ def get_all_gps_data():
     # print "all car records", record_cnt, "car number", len(new_dict)
     cursor.close()
     conn.close()
-    check_itv(new_dict)
+    # check_itv(new_dict)
     return new_dict
 
 
@@ -370,6 +371,22 @@ def get_gps_data():
     return new_dict
 
 
+def save_road_speed_pre(conn, road_speed, stime):
+    sql = "insert into tb_road_speed_pre values(:1, :2, :3)"
+    tup_list = []
+    for rid, speed in road_speed.iteritems():
+        if speed[0] == float('nan') or speed[0] == float('inf'):
+            continue
+        sp = float('%.2f' % speed[0])
+        tup = (rid, sp, stime)
+        # print tup
+        tup_list.append(tup)
+    print len(tup_list)
+    cursor = conn.cursor()
+    cursor.executemany(sql, tup_list)
+    conn.commit()
+
+
 def draw_trace(trace):
     x, y = [], []
     for i, data in enumerate(trace):
@@ -511,7 +528,7 @@ def match2road(veh, data, cnt):
 
 
 @debug_time
-def run(trace_dict):
+def run(trace_dict, end_time):
     conn = cx_Oracle.connect("hz/hz@192.168.11.88/orcl")
     # trace_dict = get_gps_data()
     # trace_dict = get_gps_data_from_redis()
@@ -519,7 +536,7 @@ def run(trace_dict):
     # print len(trace)
     mod_list = []
     mapping_dict = rid_mapping()        # 某些单行路的映射
-    # 因为路网制作时，没有制作到高架，因此将高架映射到地面道路
+    # 因为路网制作时，没有制作高架，因此将高架映射到地面道路
     dtrace = []
     tup_list = []
     road_temp = {}      # 存放道路速度临时值
@@ -561,9 +578,9 @@ def run(trace_dict):
         idx = get_tti_v0(spd, def_speed[rid])
         # print rid, S / W, len(sp_list), radio, idx
         road_speed[rid] = [spd, n_sample, idx]
-    # 补完无数据
-    # road_speed_complete(conn, road_speed, def_speed)
-    save_road_speed(conn, road_speed)
+
+    # save_road_speed(conn, road_speed)
+    save_road_speed_pre(conn, road_speed, end_time)
     # print estimate_speed.normal_cnt, estimate_speed.ab_cnt, estimate_speed.error_cnt
 
     # print "main process {0}".format(len(trace_dict)), et - bt
@@ -581,10 +598,11 @@ def run1(trace_dict):
         break
 
 
-@debug_time
 def main():
-    trace_dict = get_all_gps_data()
-    run(trace_dict)
+    for i in range(1, 31):
+        df_time = datetime(2018, 5, i, 5, 0, 0)
+        trace_dict = get_all_gps_data(df_time)
+        run(trace_dict, df_time)
 
 
 # get_gps_data_from_redis()
