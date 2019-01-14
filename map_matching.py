@@ -322,12 +322,12 @@ class MapMatching(object):
                 else:
                     p0, p1 = edge.node1.point, edge.node0.point
                 angle = calc_included_angle_math(last_point, cur_point, p0, p1)
-                if angle < 0:
+                # 单行线需要判断角度
+                if edge.oneway and angle < 0:
                     continue
                 # if cnt == 26:
                 #     print "edge", edge.edge_index, angle
                 node_set.add(node.nodeid)
-                # 单行线需要判断角度
                 edge_set.add(edge.edge_index)
                 next_dnode = DistNode(node, cur_dist + edge.edge_length)
                 node.prev_node = cur_node
@@ -348,7 +348,7 @@ class MapMatching(object):
         min_dist, sel_edge = 1e20, None
 
         # first point
-        for edge in candidate:
+        for edge in candidate :
             # n0, n1 = edge.node0, edge.nodeid1
             p0, p1 = edge.node0.point, edge.node1.point
             dist = point2segment(point, p0, p1)
@@ -449,10 +449,10 @@ class MapMatching(object):
         else:
             itv_time = (data.stime - last_data.stime).total_seconds()
             mean_speed = max(30.0, (data.speed + last_data.speed) / 2)
-            dist_thread = mean_speed / 3.6 * 1.25 * itv_time
+            dist_thread = mean_speed / 3.6 * 1.5 * itv_time
             # print "itv time", itv_time, "s0", data.speed, "last s", last_data.speed, "dist thread", dist_thread
             candidate_edges = self.get_candidate_later(cur_point, last_point, last_edge, dist_thread, cnt)
-        # if cnt == 12:
+        # if cnt == 9:
         #     draw_edge_list(candidate_edges)
 
         cur_point, cur_edge, score = self.get_mod_point(data, last_data,
