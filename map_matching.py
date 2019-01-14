@@ -85,14 +85,15 @@ class MapInfo:
             pt_list = []
             for point in road.point_list:
                 pt_list.append([point.px, point.py])
-            road_point[rid] = pt_list
+            road_point[rid] = [pt_list, road.ort]
 
         # 维护节点dict
         # 每一个点都单独列入dict，边用两点表示，道路用若干点表示
-        for rid, xylist in road_point.iteritems():
+        for rid, road_info in road_point.iteritems():
             r = self.map_road[rid]
             last_nodeid = -1
             lastx, lasty = None, None
+            xylist, ort = road_info[:]
             for i, xy in enumerate(xylist):
                 x, y = round(xy[0], 2), round(xy[1], 2)
                 str_bl = "{0},{1}".format(x, y)
@@ -107,7 +108,8 @@ class MapInfo:
                     self.map_node[nodeid] = nd
                 if i > 0:
                     edge_length = calc_dist([x, y], [lastx, lasty])
-                    edge = MapEdge(self.map_node[last_nodeid], self.map_node[nodeid], False, len(self.map_edge),
+                    oneway = False if ort == 3 else True
+                    edge = MapEdge(self.map_node[last_nodeid], self.map_node[nodeid], oneway, len(self.map_edge),
                                    edge_length, rid)
                     self.map_edge.append(edge)
                 r.add_node(nd)
