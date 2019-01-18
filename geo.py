@@ -1,12 +1,11 @@
 # coding=utf-8
 import math
 from ctypes import *
-
 import numpy as np
-
 from map_struct import Point, Segment, Vector
 
-dll = WinDLL("./dll/CoordTransDLL.dll")
+
+dll = WinDLL("./dll/CoordTransdll.dll")
 
 
 class BLH(Structure):
@@ -32,17 +31,15 @@ def bl2xy(b, l):
     blh.l = float(l)
     blh.h = 0
     xyz = XYZ()
-    global dll
     dll.WGS84_BLH_2_HZ_xyH(blh, byref(xyz))
     y, x = xyz.x, xyz.y
     return x, y
 
 
-def xy2bl(x, y):
+def xy2bl(x, y, dll):
     xyz = XYZ()
     blh = BLH()
     xyz.x, xyz.y, xyz.z = y, x, 0
-    global dll
     dll.HZ_xyH_2_WGS84_BLH(xyz, byref(blh))
     return blh.b, blh.l
 

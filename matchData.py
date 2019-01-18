@@ -113,13 +113,13 @@ def get_all_gps_data(end_time):
     """
     # end_time = datetime(2018, 5, 1, 5, 0, 0)
     conn = cx_Oracle.connect('hz/hz@192.168.11.88:1521/orcl')
-    begin_time = end_time + timedelta(minutes=-15)
-    # sql = "select px, py, speed_time, state, speed, carstate, direction, vehicle_num from " \
-    #       "TB_GPS_1805 t where speed_time >= :1 " \
-    #       "and speed_time < :2 and vehicle_num = '浙AT7484' order by speed_time "
-
+    begin_time = end_time + timedelta(minutes=-60)
     sql = "select px, py, speed_time, state, speed, carstate, direction, vehicle_num from " \
-          "TB_GPS_1805 t where speed_time >= :1 and speed_time < :2"
+          "TB_GPS_1805 t where speed_time >= :1 " \
+          "and speed_time < :2 and vehicle_num = '浙AT1008' order by speed_time "
+
+    # sql = "select px, py, speed_time, state, speed, carstate, direction, vehicle_num from " \
+    #       "TB_GPS_1805 t where speed_time >= :1 and speed_time < :2"
 
     tup = (begin_time, end_time)
     cursor = conn.cursor()
@@ -511,16 +511,9 @@ def match2road(veh, data, cnt):
     if last_edge is not None and cur_edge is not None:
         trace, speed_list = estimate_road_speed(last_edge, cur_edge, last_point,
                                                 cur_point, last_data, data, cnt)
-    #     # for edge, spd in speed_list:
-    #     #     if edge.way_id == 2839:
-    #     #         print 'suc', veh, spd, data.stime
-    #     ret = 0
-    # elif last_edge is None and cur_edge is not None:
-    #     speed_list = [[cur_edge, data.speed]]
-    #     # for edge, spd in speed_list:
-    #     #     if edge.way_id == 2839:
-    #     #         print 'first', veh, spd, data.stime
-    #     ret = 1
+        # for edge, spd, _ in speed_list:
+        #     if edge.way_id == 22:
+        #         print 'suc', veh, spd, data.stime
 
     point_list[veh], edge_list[veh] = cur_point, cur_edge
     data_list[veh] = data
@@ -579,8 +572,8 @@ def run(trace_dict, end_time):
         # print rid, S / W, len(sp_list), radio, idx
         road_speed[rid] = [spd, n_sample, idx]
 
-    # save_road_speed(conn, road_speed)
-    save_road_speed_pre(conn, road_speed, end_time)
+    save_road_speed(conn, road_speed)
+    # save_road_speed_pre(conn, road_speed, end_time)
     # print estimate_speed.normal_cnt, estimate_speed.ab_cnt, estimate_speed.error_cnt
 
     # print "main process {0}".format(len(trace_dict)), et - bt
@@ -599,10 +592,10 @@ def run1(trace_dict):
 
 
 def main():
-    for i in range(1, 31):
-        df_time = datetime(2018, 5, i, 5, 0, 0)
-        trace_dict = get_all_gps_data(df_time)
-        run(trace_dict, df_time)
+    # for i in range(1, 31):
+    df_time = datetime(2018, 5, 1, 5, 0, 0)
+    trace_dict = get_all_gps_data(df_time)
+    run(trace_dict, df_time)
 
 
 # get_gps_data_from_redis()

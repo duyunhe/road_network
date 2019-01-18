@@ -254,14 +254,14 @@ class MapEdge(object):
 
 
 class MatchState(object):
-    def __init__(self, edge_index, mod_point, dist, score):
+    def __init__(self, edge, mod_point, dist, score):
         """
-        :param edge_index: 
+        :param edge: Edge
         :param mod_point: 
         :param dist: current dist
         :param score: total score
         """
-        self.edge_index = edge_index
+        self.edge = edge
         self.mod_point = mod_point
         self.dist, self.score = dist, score
 
